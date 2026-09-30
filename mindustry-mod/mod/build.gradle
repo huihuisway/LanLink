@@ -1,0 +1,155 @@
+plugins{
+    id 'java'
+    id 'com.github.johnrengelman.shadow' version '8.1.1'
+}
+
+version = '0.17.0'
+
+ext{
+    // 编译目标游戏版本：-PgameVersion=v146（v7，走 jitpack）或 v159.7（v8，走 GitHub Releases 的 dependencies.jar）
+    // 产物 jar 是 Java 8 字节码（Jabel），单一 jar 同时兼容 v7 与 v8 运行时
+    gameVersion = project.hasProperty("gameVersion") ? project.getProperty("gameVersion") : "v146"
+    isV7 = gameVersion.startsWith("v14")
+    jabelVersion = "93fde537c7"
+    isWindows = System.getProperty("os.name").toLowerCase().contains("windows")
+    sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+    generatedSrcDir = file("$buildDir/generated/sources/buildInfo/java")
+}
+
+sourceSets.main.java.srcDir generatedSrcDir
+
+tasks.register('generateBuildInfo'){
+    inputs.property("modVersion", project.version.toString())
+    outputs.dir generatedSrcDir
+    doLast{
+        def out = new File(generatedSrcDir, "lanlink/BuildInfo.java")
+        out.parentFile.mkdirs()
+        out.text = """package lanlink;\n\npublic final class BuildInfo{\n    private BuildInfo(){\n    }\n\n    public static final String MOD_VERSION = \"${project.version}\";\n}\n"""
+    }
+}
+
+repositories{
+    mavenCentral()
+    maven{ url = 'https://jitpack.io' }
+
+    // v8+：从 Mindustry releases 直接下载 dependencies.jar（官方模板的做法，v146 无此资产）
+    // content 过滤限定只服务 Anuken:Mindustry，避免干扰 jitpack 传递依赖（如 Arc:arcnet@commit）解析
+    ivy{
+        url = 'https://github.com/'
+        patternLayout{ artifact '/[organisation]/[module]/releases/download/[revision]/dependencies.jar' }
+        metadataSources{ artifact() }
+        content{ includeModule("Anuken", "Mindustry") }
+    }
+}
+
+java{
+    targetCompatibility = 8
+    sourceCompatibility = JavaVersion.VERSION_17
+}
+
+// Java 17 语法 → Java 8 字节码（v146 桌面/Android 要求 8 字节码，v8 的 17 JVM 向下兼容）
+allprojects{
+    tasks.withType(JavaCompile){
+        dependsOn generateBuildInfo
+        options.compilerArgs.addAll(['--release', '8'])
+        options.encoding = 'UTF-8'
+    }
+}
+
+dependencies{
+    annotationProcessor "com.github.Anuken:jabel:$jabelVersion"
+
+    // 控制通道 WebSocket 客户端（纯 Java 7+，Android 兼容，随 jar 打包）
+    implementation "com.neovisionaries:nv-websocket-client:2.14"
+
+    if(isV7){
+        compileOnly "com.github.Anuken.Arc:arc-core:$gameVersion"
+        compileOnly "com.github.Anuken.Mindustry:core:$gameVersion"
+    }else{
+        compileOnly "Anuken:Mindustry:$gameVersion"
+    }
+}
+
+// v7：core 的 POM 把 Arc 模块锁在 commit 哈希上（jitpack 无现成构建），统一强制到发布 tag
+configurations.all{
+    resolutionStrategy.eachDependency{ details ->
+        if(isV7 && details.requested.group == 'com.github.Anuken.Arc'){
+            details.useVersion "$gameVersion"
+        }
+    }
+}
+
+// Shadow 打包：把 nv-websocket-client 重定位到 lanlink.shaded.ws.client，
+// 避免 Android DEx 加载时与 Arc 框架自带的 nv-websocket-client 类冲突
+// （冲突会导致游戏 Mod 浏览器下载失败）
+shadowJar{
+    archiveFileName = "${project.name}Desktop.jar"
+    relocate 'com.neovisionaries.ws.client', 'lanlink.shaded.ws.client'
+
+    from(projectDir){
+        include "mod.hjson"
+    }
+
+    from("assets/"){
+        include "**"
+    }
+}
+
+// Android 版：d8 dex + desugar，需要 ANDROID_HOME（platforms/android.jar + build-tools 里的 d8）
+tasks.register('jarAndroid'){
+    dependsOn "shadowJar"
+    def projectName = project.name
+
+    doLast{
+        if(!sdkRoot || !new File(sdkRoot).exists()) throw new GradleException("No valid Android SDK found. Ensure that ANDROID_HOME is set to your Android SDK directory.")
+
+        def platformRoot = new File("$sdkRoot/platforms/").listFiles().sort().reverse().find{ f -> new File(f, "android.jar").exists() }
+
+        if(!platformRoot) throw new GradleException("No android.jar found. Ensure that you have an Android platform installed.")
+
+        def dependencies = configurations.compileClasspath.asList() + configurations.runtimeClasspath.asList() + [new File(platformRoot, "android.jar")]
+
+        def buildToolsRoots = new File("$sdkRoot/build-tools").listFiles()
+        def buildToolsRoot = buildToolsRoots ? buildToolsRoots.sort().reverse().find{ f -> new File(f, isWindows ? "d8.bat" : "d8").exists() } : null
+        if(!buildToolsRoot) throw new GradleException("No d8 found. Ensure that Android build-tools are installed under ANDROID_HOME/build-tools.")
+
+        def d8 = new File(buildToolsRoot, isWindows ? "d8.bat" : "d8").path
+
+        exec{
+            workingDir new File(buildDir, "libs")
+            commandLine d8
+            dependencies.each{ dependency ->
+                args "--classpath", dependency.path
+            }
+            args "--min-api", "14", "--output", "${projectName}Android.jar", "${projectName}Desktop.jar"
+        }
+    }
+}
+
+// 桌面 + Android 合并 jar（最终分发产物）
+tasks.register('deploy', Jar){
+    def projectName = project.name
+    dependsOn jarAndroid
+    dependsOn shadowJar
+    archiveFileName = "${projectName}.jar"
+
+    from{ [zipTree("build/libs/${projectName}Desktop.jar"), zipTree("build/libs/${projectName}Android.jar")] }
+
+    doLast{
+        delete{
+            delete "build/libs/${projectName}Android.jar"
+        }
+    }
+}
+
+// CI 统一调用：生成桌面 + Android 合并包及 SHA-256 校验文件。
+tasks.register('releaseBuild'){
+    dependsOn deploy
+    doLast{
+        ant.checksum(
+            file: file("build/libs/${project.name}.jar"),
+            algorithm: "SHA-256",
+            fileext: ".sha256"
+        )
+    }
+}

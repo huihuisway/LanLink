@@ -1,0 +1,19 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+.env.*.local
+node.env
+*.zip
+coverage/
+.nyc_output/
+.DS_Store
+# Local state and build outputs
+/.deploy-tmp/
+/.dev-logs/
+/.doc-sync/
+/.superpowers/
+/shared/dump.rdb
+**/.gradle/
+**/build/

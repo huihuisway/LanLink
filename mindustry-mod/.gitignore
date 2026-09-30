@@ -1,0 +1,10 @@
+tools/
+build/
+.gradle/
+*.zip
+*.class
+.idea/
+scratch/local/
+dump.rdb
+.claude/
+node_modules/

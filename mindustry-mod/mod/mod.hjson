@@ -1,0 +1,23 @@
+displayName: "LanLink 联机"
+
+name: "lanlink"
+
+author: "MindProject"
+
+main: "lanlink.LanLinkMod"
+
+description: "免公网 IP 一键开房联机：房主开房拿到公网地址/房间码，朋友可输入房间码加入。支持 v7/v8 与桌面/手机端。"
+
+version: 0.17.0
+
+#v7 最终版起支持
+minGameVersion: 146
+
+#跨大版本兼容声明：v8 对 Java Mod 要求 minGameVersion >= 154（Vars.minJavaModGameVersion），
+#低于此值会被标记"不兼容 v8"；此字段是官方为"v7/v8 双兼容 Mod"留的豁免位（v157+ 支持，v146 忽略未知字段）
+legacyCompatible: true
+
+#工具型 Mod：不改游戏内容，不参与客户端 Mod 同步校验（原版客人可直接进房）
+hidden: true
+
+java: true

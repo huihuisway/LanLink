@@ -1,0 +1,375 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "LanLink Control Plane API",
+    "description": "Mindustry 联机中继服务的控制面 API",
+    "version": "1.0.0",
+    "license": {
+      "name": "MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    },
+    "contact": {
+      "name": "LanLink Team"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://mdtbbs.cn",
+      "description": "生产环境"
+    }
+  ],
+  "tags": [
+    {
+      "name": "health",
+      "description": "健康检查与版本信息"
+    },
+    {
+      "name": "nodes",
+      "description": "边缘节点管理"
+    },
+    {
+      "name": "rooms",
+      "description": "房间信息查询"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "健康检查",
+        "description": "返回服务健康状态",
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "服务正常",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "timestamp"],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": ["ok", "degraded", "error"],
+                      "example": "ok"
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time",
+                      "example": "2026-09-02T10:30:00.000Z"
+                    },
+                    "version": {
+                      "type": "string",
+                      "example": "1.0.0"
+                    },
+                    "uptime": {
+                      "type": "integer",
+                      "description": "服务运行时长（秒）",
+                      "example": 3600
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "服务不可用",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/version": {
+      "get": {
+        "tags": ["health"],
+        "summary": "获取版本信息",
+        "description": "返回当前服务版本号",
+        "operationId": "getVersion",
+        "responses": {
+          "200": {
+            "description": "版本信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["version", "buildTime", "gitCommit"],
+                  "properties": {
+                    "version": {
+                      "type": "string",
+                      "example": "1.0.0"
+                    },
+                    "buildTime": {
+                      "type": "string",
+                      "format": "date-time",
+                      "example": "2026-09-01T08:00:00.000Z"
+                    },
+                    "gitCommit": {
+                      "type": "string",
+                      "example": "abc1234"
+                    },
+                    "nodeVersion": {
+                      "type": "string",
+                      "example": "20.10.0"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nodes/available": {
+      "get": {
+        "tags": ["nodes"],
+        "summary": "获取可用节点列表",
+        "description": "返回当前在线且可接受新房间的边缘节点",
+        "operationId": "getAvailableNodes",
+        "responses": {
+          "200": {
+            "description": "可用节点列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["nodes", "count"],
+                  "properties": {
+                    "nodes": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Node"
+                      }
+                    },
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "example": 3
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "请求格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "服务器内部错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{code}": {
+      "get": {
+        "tags": ["rooms"],
+        "summary": "获取房间信息",
+        "description": "根据房间码查询房间详情，返回原版 Mindustry 客户端可直接使用的加入地址。此接口不返回 room_token（内部鉴权令牌），仅返回公共信息。",
+        "operationId": "getRoomByCode",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "path",
+            "required": true,
+            "description": "房间码，格式为 6 位大写字母数字组合",
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z0-9]{6}$",
+              "example": "A1B2C3"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "房间信息",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "房间码格式错误",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "房间不存在或已关闭",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Node": {
+        "type": "object",
+        "required": ["id", "status", "region", "capacity"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "node_shanghai01"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["online", "busy", "offline"],
+            "example": "online"
+          },
+          "region": {
+            "type": "string",
+            "example": "cn-east"
+          },
+          "capacity": {
+            "type": "object",
+            "properties": {
+              "maxRooms": {
+                "type": "integer",
+                "minimum": 1,
+                "example": 100
+              },
+              "currentRooms": {
+                "type": "integer",
+                "minimum": 0,
+                "example": 42
+              },
+              "availableSlots": {
+                "type": "integer",
+                "minimum": 0,
+                "example": 58
+              }
+            }
+          },
+          "latency": {
+            "type": "integer",
+            "description": "节点到控制面的延迟（毫秒）",
+            "minimum": 0,
+            "example": 15
+          },
+          "lastHeartbeat": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-02T10:29:55.000Z"
+          }
+        }
+      },
+      "RoomInfo": {
+        "type": "object",
+        "required": ["code", "hostName", "status", "joinAddress"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "A1B2C3"
+          },
+          "hostName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "example": "MyServer"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["waiting", "playing", "closed"],
+            "example": "waiting"
+          },
+          "joinAddress": {
+            "type": "string",
+            "description": "原版 Mindustry 客户端可直接使用的加入地址",
+            "example": "1.2.3.4:7777"
+          },
+          "maxPlayers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 255,
+            "example": 16
+          },
+          "currentPlayers": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 3
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-02T10:00:00.000Z"
+          },
+          "nodeId": {
+            "type": "string",
+            "example": "node_shanghai01"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error", "message"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "NOT_FOUND"
+          },
+          "message": {
+            "type": "string",
+            "example": "Room not found or already closed"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "请求追踪 ID",
+            "example": "req_abc123"
+          }
+        }
+      }
+    }
+  }
+}

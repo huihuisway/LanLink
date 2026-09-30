@@ -1,0 +1,1381 @@
+openapi: 3.0.3
+info:
+  title: LanLink Control Plane API
+  description: Mindustry 联机中继服务的控制面 API（协议 v2）
+  version: 2.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    name: LanLink Team
+
+servers:
+  - url: https://mdtbbs.cn
+    description: 生产环境
+  - url: http://localhost:5100
+    description: 本地开发环境
+
+tags:
+  - name: health
+    description: 健康检查与版本信息
+  - name: auth
+    description: 认证（登录 / token / 刷新）
+  - name: nodes
+    description: 边缘节点查询
+  - name: rooms
+    description: 房间信息查询
+  - name: friends
+    description: 好友与邀请（Phase C）
+  - name: admin
+    description: 管理员接口（需论坛 admin 身份）
+  - name: websocket
+    description: WebSocket 连接端点
+
+paths:
+  # ========== health ==========
+  /api/health:
+    get:
+      tags: [health]
+      summary: 健康检查
+      operationId: getHealth
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp]
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, degraded, error]
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+                  version:
+                    type: string
+                    example: '0.2.0'
+                  uptime:
+                    type: integer
+                    description: 服务运行时长（秒）
+        '503':
+          description: 服务不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/version:
+    get:
+      tags: [health]
+      summary: 获取版本信息
+      operationId: getVersion
+      responses:
+        '200':
+          description: 版本信息
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version:
+                    type: string
+                    example: '0.2.0'
+                  buildTime:
+                    type: string
+                    format: date-time
+                  gitCommit:
+                    type: string
+                  nodeVersion:
+                    type: string
+
+  # ========== auth ==========
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: 用户名密码登录
+      description: |
+        用论坛账号的用户名密码登录。
+        限流：同一 IP 每分钟 ≤ 30 次，同一用户名每分钟 ≤ 30 次。
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: 缺少用户名或密码
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 用户名或密码错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: 登录过于频繁
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 论坛验证失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 登录服务未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/code/exchange:
+    post:
+      tags: [auth]
+      summary: 论坛识别码换 token
+      description: 论坛生成 LanLink 识别码，控制面兑换为 LanLink token
+      operationId: authCodeExchange
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  example: 'LL-ABCD-2345'
+      responses:
+        '200':
+          description: 兑换成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: 缺少识别码
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 识别码无效或已被重置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 论坛识别码校验失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 登录服务未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: 获取当前用户信息
+      operationId: authMe
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 当前用户
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, user]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: token 无效或已过期
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      summary: 刷新 token
+      description: |
+        读取论坛最新用户状态（手机号验证、角色等）并重签 token。
+        限流：每用户每分钟 ≤ 10 次。
+      operationId: authRefresh
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 刷新成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          description: token 无效或用户不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: 刷新过于频繁
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 论坛状态刷新失败
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/device/start:
+    post:
+      tags: [auth]
+      summary: MindAuth 设备授权流（已废弃）
+      deprecated: true
+      description: |
+        已废弃，过渡期保留。请使用 `/api/auth/login`。
+        Sunset: 2027-01-01
+      operationId: authDeviceStart
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_id:
+                  type: string
+      responses:
+        '200':
+          description: 设备授权开始
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  session_id:
+                    type: string
+                  user_code:
+                    type: string
+                  verification_uri:
+                    type: string
+                  verification_uri_complete:
+                    type: string
+                  expires_in:
+                    type: integer
+                  interval:
+                    type: integer
+        '503':
+          description: MindAuth 未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/auth/device/poll:
+    post:
+      tags: [auth]
+      summary: MindAuth 设备授权轮询（已废弃）
+      deprecated: true
+      description: |
+        已废弃，过渡期保留。请使用 `/api/auth/login`。
+        Sunset: 2027-01-01
+      operationId: authDevicePoll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id]
+              properties:
+                session_id:
+                  type: string
+      responses:
+        '200':
+          description: 轮询结果
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        example: false
+                      status:
+                        type: string
+                        enum: [pending, expired, denied]
+                  - $ref: '#/components/schemas/TokenResponse'
+
+  # ========== nodes ==========
+  /api/nodes/available:
+    get:
+      tags: [nodes]
+      summary: 获取可用节点列表
+      description: 返回当前在线的边缘节点
+      operationId: getAvailableNodes
+      security:
+        - {}
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 可用节点列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes, count]
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/NodeInfo'
+                  count:
+                    type: integer
+                    example: 3
+        '400':
+          description: 请求格式错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ========== rooms ==========
+  /api/rooms/public:
+    get:
+      tags: [rooms]
+      summary: 获取公共房间列表
+      description: 返回所有公开且未隐藏的房间，按创建时间倒序
+      operationId: getPublicRooms
+      responses:
+        '200':
+          description: 公共房间列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [rooms]
+                properties:
+                  rooms:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RoomSummary'
+
+  /api/rooms/{code}:
+    get:
+      tags: [rooms]
+      summary: 获取房间信息
+      description: |
+        根据房间码查询房间详情。
+        **注意**：此接口不返回 `room_token`（内部鉴权令牌）。
+      operationId: getRoomByCode
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: 房间码，格式 `MDT-XXXXXX`（剔除 0O1I）
+          schema:
+            type: string
+            pattern: '^MDT-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$'
+            example: 'MDT-ABC123'
+      responses:
+        '200':
+          description: 房间信息
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomSummary'
+        '404':
+          description: 房间不存在或已关闭
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ========== friends ==========
+  /api/friends:
+    get:
+      tags: [friends]
+      summary: 好友列表 + presence
+      operationId: getFriends
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 好友列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, friends]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  friends:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FriendWithPresence'
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: 论坛服务错误
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 论坛服务未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/friends/requests:
+    get:
+      tags: [friends]
+      summary: 待处理好友请求
+      operationId: getFriendRequests
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: 待处理请求列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, requests]
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  requests:
+                    type: array
+                    items:
+                      type: object
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 论坛服务未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/invites/send:
+    post:
+      tags: [friends]
+      summary: 房主邀请好友加入房间
+      description: |
+        只有房主可以发送邀请。被邀请人必须是房主的好友。
+        邀请写入 Redis（10 分钟过期）并通过 Forum 通知。
+      operationId: sendInvite
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_code, friend_user_id]
+              properties:
+                room_code:
+                  type: string
+                  example: 'MDT-ABC123'
+                friend_user_id:
+                  type: string
+                  example: '42'
+      responses:
+        '200':
+          description: 邀请已发送
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+        '400':
+          description: 缺少参数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: 只有房主可以发送邀请 / 只能邀请好友
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 房间不存在或已关闭
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 论坛服务未配置
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/invites/respond:
+    post:
+      tags: [friends]
+      summary: 响应邀请
+      description: 客人接受或拒绝房主的邀请
+      operationId: respondInvite
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_code, action]
+              properties:
+                room_code:
+                  type: string
+                  example: 'MDT-ABC123'
+                action:
+                  type: string
+                  enum: [accept, decline]
+      responses:
+        '200':
+          description: 响应成功
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        example: true
+                      room:
+                        $ref: '#/components/schemas/RoomJoinInfo'
+                  - type: object
+                    properties:
+                      ok:
+                        type: boolean
+                        example: true
+        '400':
+          description: 缺少参数或 action 无效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 邀请不存在或已过期 / 房间已关闭
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ========== admin ==========
+  /api/admin/:
+    get:
+      tags: [admin]
+      summary: 管理员仪表盘
+      description: 需要论坛 admin/super_admin 身份（通过 forum_session cookie 或 x-forum-session header）
+      operationId: adminDashboard
+      responses:
+        '200':
+          description: 仪表盘数据
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  rooms:
+                    type: integer
+                  nodes:
+                    type: integer
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/rooms:
+    get:
+      tags: [admin]
+      summary: 所有房间列表
+      operationId: adminRooms
+      responses:
+        '200':
+          description: 房间列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  rooms:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminRoom'
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/rooms/{code}/close:
+    post:
+      tags: [admin]
+      summary: 强制关闭房间
+      operationId: adminCloseRoom
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 关闭成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 房间不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/rooms/{code}/hide:
+    post:
+      tags: [admin]
+      summary: 隐藏/取消隐藏房间
+      operationId: adminHideRoom
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                hide:
+                  type: boolean
+                  default: true
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: 操作成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: 房间不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/nodes:
+    get:
+      tags: [admin]
+      summary: 所有节点列表（含离线）
+      operationId: adminNodes
+      responses:
+        '200':
+          description: 节点列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AdminNode'
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/nodes/tokens:
+    get:
+      tags: [admin]
+      summary: 列出所有节点 token
+      operationId: adminListTokens
+      responses:
+        '200':
+          description: token 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  tokens:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TokenInfo'
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+    post:
+      tags: [admin]
+      summary: 创建社区节点 token
+      description: |
+        创建新的社区节点 token。**token 只显示一次**，请立即保存。
+        官方节点 token 不允许通过此接口创建，需修改 NODE_TOKENS 环境变量。
+      operationId: adminCreateToken
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: '广州社区节点'
+                owner:
+                  type: string
+                  description: 维护者论坛账号
+                region:
+                  type: string
+                  example: '华南'
+                description:
+                  type: string
+      responses:
+        '200':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  token:
+                    $ref: '#/components/schemas/TokenInfo'
+                  registration:
+                    type: object
+                    properties:
+                      node_token:
+                        type: string
+                        description: 节点 token（只显示一次）
+                      node_id:
+                        type: string
+                      node_name:
+                        type: string
+                      instructions:
+                        type: string
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: token 冲突
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: 不支持动态 token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/nodes/tokens/{id}:
+    delete:
+      tags: [admin]
+      summary: 撤销社区节点 token
+      description: |
+        撤销后，使用该 token 的节点即使重启也无法注册。
+        官方节点 token 不允许通过此接口撤销。
+      operationId: adminRevokeToken
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: 撤销成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        '403':
+          description: 不允许撤销官方节点 token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: token 不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/admin/audit:
+    get:
+      tags: [admin]
+      summary: 管理员操作审计日志
+      description: 内存存储，重启丢失（最多 200 条）
+      operationId: adminAudit
+      responses:
+        '200':
+          description: 审计日志
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  audit:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEntry'
+        '403':
+          description: 需要管理员身份
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  # ========== websocket ==========
+  /ws/mod:
+    get:
+      tags: [websocket]
+      summary: Mod WebSocket（房主）
+      description: |
+        房主 Mod 通过此端点连接控制面。
+        协议：hello → hello_ok → create_room → room_ok → close_room / 断线宽限 60s / resume
+      operationId: wsModConnect
+      parameters:
+        - name: Upgrade
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [websocket]
+        - name: Connection
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [Upgrade]
+      responses:
+        '101':
+          description: WebSocket 握手成功
+        '400':
+          description: 请求格式错误
+
+  /ws/node:
+    get:
+      tags: [websocket]
+      summary: 节点 WebSocket
+      description: |
+        边缘节点通过此端点连接控制面。
+        协议：register → heartbeat 每 10s → 30s 无心跳摘除
+      operationId: wsNodeConnect
+      parameters:
+        - name: Upgrade
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [websocket]
+        - name: Connection
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [Upgrade]
+      responses:
+        '101':
+          description: WebSocket 握手成功
+        '400':
+          description: 请求格式错误
+
+  /ws/guest:
+    get:
+      tags: [websocket]
+      summary: 客人 WebSocket
+      description: |
+        客人 Mod 通过此端点连接控制面。
+        协议：hello → join_request → join_accepted / peer_join / peer_left
+        连接后 5 分钟内未加入房间则空闲超时断开。
+      operationId: wsGuestConnect
+      parameters:
+        - name: Upgrade
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [websocket]
+        - name: Connection
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [Upgrade]
+      responses:
+        '101':
+          description: WebSocket 握手成功
+        '400':
+          description: 请求格式错误
+
+components:
+  schemas:
+    Error:
+      type: object
+      required: [ok, code, message]
+      properties:
+        ok:
+          type: boolean
+          example: false
+        code:
+          type: string
+          example: 'NOT_FOUND'
+        message:
+          type: string
+          example: '房间不存在或已关闭'
+
+    User:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [anonymous, forum, dev]
+          example: forum
+        id:
+          type: string
+          example: '42'
+        mindauth_id:
+          type: string
+          nullable: true
+        username:
+          type: string
+          example: 'alice'
+        display_name:
+          type: string
+          example: 'Alice'
+        avatar_url:
+          type: string
+        role:
+          type: string
+          example: 'user'
+        roles:
+          type: array
+          items:
+            type: string
+          example: ['user']
+        phone_verified:
+          type: boolean
+          example: true
+
+    TokenResponse:
+      type: object
+      required: [ok, token, expires_in, user]
+      properties:
+        ok:
+          type: boolean
+          example: true
+        token:
+          type: string
+          description: LanLink JWT token
+        expires_in:
+          type: integer
+          description: token 有效期（秒）
+          example: 2592000
+        user:
+          $ref: '#/components/schemas/User'
+
+    NodeInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          example: 'lln-a1b2c3d4'
+        name:
+          type: string
+          example: '上海节点'
+        addr:
+          type: string
+          description: 节点公网 IP
+          example: '1.2.3.4'
+        tunnelPort:
+          type: integer
+          example: 20000
+        official:
+          type: boolean
+          example: true
+        region:
+          type: string
+          example: '华东'
+        tags:
+          type: array
+          items:
+            type: string
+          example: ['community']
+        description:
+          type: string
+        online:
+          type: boolean
+          example: true
+        stats:
+          type: object
+          properties:
+            rooms:
+              type: integer
+            sessions:
+              type: integer
+            mbpsUsed:
+              type: number
+        requiresLogin:
+          type: boolean
+          description: 该节点是否要求用户登录
+          example: true
+        access:
+          type: string
+          enum: [anonymous, login]
+          description: 节点访问策略
+
+    RoomSummary:
+      type: object
+      properties:
+        code:
+          type: string
+          example: 'MDT-ABC123'
+        name:
+          type: string
+          description: 房主自定义房名
+        display_name:
+          type: string
+          description: LanLink 彩色标识
+        public:
+          type: boolean
+          description: 是否公开
+        owner:
+          $ref: '#/components/schemas/User'
+        node:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            addr:
+              type: string
+            room_port:
+              type: integer
+        direct:
+          type: object
+          description: 房主直连地址（M2）
+          properties:
+            mode:
+              type: string
+              enum: [upnp, stun, manual]
+            addr:
+              type: string
+            port:
+              type: integer
+        direct_candidates:
+          type: array
+          description: 房主直连候选列表（M2）
+          items:
+            type: object
+            properties:
+              mode:
+                type: string
+              addr:
+                type: string
+              port:
+                type: integer
+
+    RoomJoinInfo:
+      type: object
+      description: 接受邀请后返回的房间加入信息
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        display_name:
+          type: string
+        node:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            addr:
+              type: string
+            room_port:
+              type: integer
+            tunnel_port:
+              type: integer
+
+    AdminRoom:
+      type: object
+      properties:
+        code:
+          type: string
+        name:
+          type: string
+        display_name:
+          type: string
+        public:
+          type: boolean
+        hidden:
+          type: boolean
+        hidden_reason:
+          type: string
+        owner:
+          $ref: '#/components/schemas/User'
+        node:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            addr:
+              type: string
+            room_port:
+              type: integer
+        created_at:
+          type: integer
+          description: 创建时间戳（毫秒）
+        owner_connected:
+          type: boolean
+
+    AdminNode:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        addr:
+          type: string
+        tunnelPort:
+          type: integer
+        online:
+          type: boolean
+        official:
+          type: boolean
+        region:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        description:
+          type: string
+        stats:
+          type: object
+
+    TokenInfo:
+      type: object
+      properties:
+        token:
+          type: string
+          description: token 值（创建时返回，列表时不返回完整值）
+        id:
+          type: string
+          example: 'lln-a1b2c3d4'
+        name:
+          type: string
+        owner:
+          type: string
+        official:
+          type: boolean
+        region:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        description:
+          type: string
+        createdAt:
+          type: integer
+        online:
+          type: boolean
+          description: 该 token 对应节点当前是否在线
+
+    FriendWithPresence:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+        presence:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [online, hosting, offline]
+            room_code:
+              type: string
+            room_name:
+              type: string
+            display_name:
+              type: string
+            node_name:
+              type: string
+
+    AuditEntry:
+      type: object
+      properties:
+        admin_user_id:
+          type: string
+        admin_name:
+          type: string
+        action:
+          type: string
+          example: 'token.create'
+        target_type:
+          type: string
+          example: 'token'
+        target_id:
+          type: string
+        reason:
+          type: string
+        ip:
+          type: string
+        created_at:
+          type: integer
+          description: 时间戳（毫秒）
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: LanLink token（通过 /api/auth/login 或 /api/auth/code/exchange 获取）

@@ -1,0 +1,26 @@
+{
+  "name": "lanlink",
+  "version": "0.2.0",
+  "private": true,
+  "description": "LanLink — Mindustry 联机中继（控制面 + 边缘节点）",
+  "main": "src/app.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "node --watch src/app.js",
+    "dev:node": "node --watch src/node/agent.js",
+    "start": "node src/app.js",
+    "start:node": "node src/node/agent.js",
+    "test": "node --test \"tests/*.test.js\""
+  },
+  "dependencies": {
+    "@koa/router": "^13.1.0",
+    "dotenv": "^16.4.5",
+    "ioredis": "^5.4.1",
+    "koa": "^2.15.4",
+    "koa-bodyparser": "^4.4.1",
+    "mysql2": "^3.11.0",
+    "ws": "^8.18.0"
+  }
+}
